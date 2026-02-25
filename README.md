@@ -41,10 +41,10 @@ smart-session-routing/
 ├── SKILL.md                           # Core guide (~750 words, always loaded)
 ├── references/
 │   ├── decision-framework.md          # Detailed scoring model & thresholds
-│   └── implementation-patterns.md     # Backend service & frontend integration
+│   └── implementation-patterns.md     # Architecture patterns & design principles
 └── examples/
-    ├── session-router-prompt.md       # Prompt template for AI self-judgment
-    └── frontend-integration.js        # Vue 3 / vanilla JS integration
+    ├── conversation-scenarios.md      # 14 real-world routing scenarios
+    └── session-router-prompt.md       # Prompt template for AI self-judgment
 ```
 
 ## 🚀 Quick Start
@@ -75,13 +75,15 @@ Add the prompt template from `examples/session-router-prompt.md` to your system 
 <!--session_route: {"decision": "continue", "confidence": 0.9}-->
 ```
 
-### Approach 2: Backend Service
+### Approach 2: Lightweight Middleware
 
-Implement a `SessionRouter` service that intercepts messages before they reach the AI model. See `references/implementation-patterns.md` for a complete Python/FastAPI example.
+Implement a routing service that intercepts messages before they reach the AI model. See `references/implementation-patterns.md` for three architecture patterns.
 
-### Approach 3: Frontend Heuristics
+### Approach 3: Hybrid (Production Grade)
 
-Use `examples/frontend-integration.js` for lightweight client-side checks (intent keywords, time gaps) before sending messages.
+Combine client-side heuristics (instant intent/time checks) with server-side intelligence (semantic analysis). Best for large-scale applications.
+
+See `examples/conversation-scenarios.md` for 14 real-world scenarios to calibrate your routing logic.
 
 ## ⚙️ Configuration
 

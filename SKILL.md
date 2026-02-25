@@ -92,16 +92,12 @@ Lightweight client-side checks before sending the message to the backend.
 
 **Best for**: Augmenting server-side routing, instant UX feedback.
 
-```javascript
-// 在发送前检查时间间隔 Check time gap before sending
-const lastMessageTime = session.messages.at(-1)?.timestamp;
-const gap = Date.now() - lastMessageTime;
-if (gap > 24 * 60 * 60 * 1000) {
-  promptUserForNewSession();
-}
-```
+Implement quick checks in the message send flow:
+- Intent keyword matching (instant, no API call)
+- Time gap since last message (timestamp comparison)
+- Message count / token estimation (simple arithmetic)
 
-See `examples/frontend-integration.js` for a complete integration example.
+If any local check triggers, act immediately or prompt the user. Reserve server-side checks for ambiguous cases only.
 
 ## Integration Checklist
 
@@ -121,10 +117,10 @@ When implementing session routing:
 
 For detailed decision logic and implementation architecture, consult:
 - **`references/decision-framework.md`** - Complete scoring model, thresholds, edge cases, and decision matrix
-- **`references/implementation-patterns.md`** - Backend service architecture, frontend store integration, API design patterns
+- **`references/implementation-patterns.md`** - Architecture patterns, design principles, monitoring and tuning
 
 ### Example Files
 
-Working examples in `examples/`:
+Calibration references and templates in `examples/`:
+- **`examples/conversation-scenarios.md`** - 14 real-world conversation scenarios showing when each routing decision applies
 - **`examples/session-router-prompt.md`** - Production-ready prompt template for AI-self-judgment approach
-- **`examples/frontend-integration.js`** - Frontend store integration with session routing hooks

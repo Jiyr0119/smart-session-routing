@@ -41,10 +41,10 @@ smart-session-routing/
 ├── SKILL.md                           # 核心指南（~750 词，始终加载）
 ├── references/
 │   ├── decision-framework.md          # 详细评分模型和阈值
-│   └── implementation-patterns.md     # 后端服务 & 前端集成架构
+│   └── implementation-patterns.md     # 架构模式和设计原则
 └── examples/
-    ├── session-router-prompt.md       # AI 自判断 Prompt 模板
-    └── frontend-integration.js        # Vue 3 / 原生 JS 集成示例
+    ├── conversation-scenarios.md      # 14 个真实路由场景
+    └── session-router-prompt.md       # AI 自判断 Prompt 模板
 ```
 
 ## 🚀 快速开始
@@ -75,13 +75,15 @@ smart-session-routing/
 <!--session_route: {"decision": "continue", "confidence": 0.9}-->
 ```
 
-### 方式二：后端服务
+### 方式二：轻量中间件
 
-实现一个 `SessionRouter` 中间件，在消息到达 AI 模型前拦截并分析。完整的 Python/FastAPI 示例见 `references/implementation-patterns.md`。
+实现一个路由服务，在消息到达 AI 模型前拦截并分析。详见 `references/implementation-patterns.md` 中的三种架构模式。
 
-### 方式三：前端启发式检查
+### 方式三：混合模式（生产级）
 
-使用 `examples/frontend-integration.js` 进行轻量级客户端检查（意图关键词、时间间隔），在发送消息前快速判断。
+结合前端启发式检查（即时意图/时间判断）和后端智能分析（语义相似度）。适合大规模应用。
+
+参考 `examples/conversation-scenarios.md` 中的 14 个真实场景来校准你的路由逻辑。
 
 ## ⚙️ 可配置参数
 

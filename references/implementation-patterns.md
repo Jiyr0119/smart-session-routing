@@ -1,380 +1,163 @@
 # Implementation Patterns for Smart Session Routing
 
-## Architecture Overview
+## Architecture Approaches
 
+Three architectural patterns for integrating session routing, ordered by implementation complexity:
+
+### Pattern 1: Prompt Injection (Zero Infrastructure)
+
+Embed routing logic directly into the AI model's system prompt. The model evaluates its own conversation context and outputs a routing decision before responding.
+
+**How it works:**
 ```
-┌─────────────────────────────────────────────────┐
-│                   Frontend                       │
-│  ┌──────────┐  ┌──────────┐  ┌───────────────┐  │
-│  │ Chat UI  │→ │  Store   │→ │ Session Router│  │
-│  │          │  │ (Pinia)  │  │  (pre-send)   │  │
-│  └──────────┘  └──────────┘  └──────┬────────┘  │
-│                                      │           │
-└──────────────────────────────────────┼───────────┘
-                                       │
-                              ┌────────▼────────┐
-                              │   Backend API    │
-                              │  /chat/route     │
-                              │  /chat/send      │
-                              └────────┬────────┘
-                                       │
-                              ┌────────▼────────┐
-                              │  Session Router  │
-                              │    Service       │
-                              │  ┌────────────┐  │
-                              │  │ Semantic    │  │
-                              │  │ Analyzer    │  │
-                              │  ├────────────┤  │
-                              │  │ Intent      │  │
-                              │  │ Detector    │  │
-                              │  ├────────────┤  │
-                              │  │ Context     │  │
-                              │  │ Monitor     │  │
-                              │  └────────────┘  │
-                              └─────────────────┘
+System Prompt → includes routing instructions
+     ↓
+AI receives: [conversation history] + [new message]
+     ↓
+AI outputs: <!--session_route: {decision, confidence}--> + response
+     ↓
+Frontend parses the JSON comment and acts on the decision
 ```
 
-## Backend Implementation
+**Pros:** No backend changes, works with any LLM API, fastest to ship
+**Cons:** Adds ~100-200 tokens overhead per response, routing quality depends on model capability
+**Best for:** MVPs, small teams, applications with < 10k daily active users
 
-### Session Router Service (Python / FastAPI)
-
-```python
-# session_router.py
-# 会话路由服务 Session routing service
-
-from enum import Enum
-from dataclasses import dataclass
-
-class RouteDecision(Enum):
-    """路由决策枚举 Route decision enum"""
-    CONTINUE = "continue"
-    NEW_SESSION = "new_session"
-    PROMPT_USER = "prompt_user"
-    FORK = "fork"
-
-@dataclass
-class RouteResult:
-    """路由结果 Route result"""
-    decision: RouteDecision
-    confidence: float            # 置信度 Confidence score (0-1)
-    reason: str                  # 决策原因 Decision reason
-    summary_carry_over: str = "" # 摘要延续 Summary to carry over
-
-class SessionRouter:
-    """
-    会话路由器 Session router
-    分析消息并决定路由策略 Analyze message and decide routing strategy
-    """
-
-    def __init__(self, config: dict = None):
-        self.config = config or self._default_config()
-
-    def _default_config(self):
-        return {
-            "semantic_threshold": 0.3,
-            "context_warning_pct": 0.6,
-            "context_critical_pct": 0.8,
-            "time_gap_prompt_hours": 4,
-            "time_gap_new_session_hours": 24,
-            "intent_keywords_zh": [
-                "新对话", "新会话", "换个话题", "重新开始",
-                "新的问题", "不说这个了", "换一个", "另一个话题"
-            ],
-            "intent_keywords_en": [
-                "new chat", "new conversation", "new topic",
-                "start over", "different subject", "switch topic"
-            ]
-        }
-
-    async def route(self, message: str, conversation) -> RouteResult:
-        """
-        主路由方法 Main routing method
-        按优先级检查各信号 Check signals by priority
-        """
-        # 1. 显式意图检测 (最高优先级) Explicit intent detection (highest priority)
-        intent = self._detect_intent(message)
-        if intent:
-            return RouteResult(
-                decision=RouteDecision.NEW_SESSION,
-                confidence=0.95,
-                reason=f"Explicit intent detected: {intent}"
-            )
-
-        # 2. 上下文窗口检查 Context window check
-        ctx_util = self._check_context_utilization(conversation)
-        if ctx_util > self.config["context_critical_pct"]:
-            summary = await self._generate_summary(conversation)
-            return RouteResult(
-                decision=RouteDecision.NEW_SESSION,
-                confidence=0.85,
-                reason="Context window critical",
-                summary_carry_over=summary
-            )
-
-        # 3. 语义相关性检查 Semantic relevance check
-        similarity = await self._compute_similarity(message, conversation)
-        if similarity < self.config["semantic_threshold"]:
-            return RouteResult(
-                decision=RouteDecision.PROMPT_USER,
-                confidence=0.7,
-                reason=f"Low semantic similarity: {similarity:.2f}"
-            )
-
-        # 4. 时间间隔检查 Time gap check
-        gap_hours = self._compute_time_gap(conversation)
-        if gap_hours > self.config["time_gap_new_session_hours"]:
-            return RouteResult(
-                decision=RouteDecision.PROMPT_USER,
-                confidence=0.6,
-                reason=f"Long time gap: {gap_hours:.1f}h"
-            )
-
-        # 5. 默认继续 Default to continue
-        return RouteResult(
-            decision=RouteDecision.CONTINUE,
-            confidence=0.9,
-            reason="All signals normal"
-        )
-
-    def _detect_intent(self, message: str) -> str | None:
-        """检测显式意图 Detect explicit new-session intent"""
-        text = message.lower().strip()
-        all_keywords = (
-            self.config["intent_keywords_zh"] +
-            self.config["intent_keywords_en"]
-        )
-        for kw in all_keywords:
-            if kw in text:
-                return kw
-        return None
-
-    def _check_context_utilization(self, conversation) -> float:
-        """计算上下文使用率 Calculate context utilization"""
-        # 实际实现需要 token 计数 Actual impl needs token counting
-        total_tokens = sum(
-            len(m.get("content", "")) * 0.75  # 粗略估算 Rough estimate
-            for m in conversation.get("messages", [])
-        )
-        max_tokens = conversation.get("model_max_tokens", 128000)
-        return total_tokens / max_tokens
-
-    async def _compute_similarity(self, message, conversation) -> float:
-        """计算语义相似度 Compute semantic similarity"""
-        # 实际实现使用 embedding 模型 Actual impl uses embedding model
-        # 此处为占位 Placeholder
-        return 0.5
-
-    def _compute_time_gap(self, conversation) -> float:
-        """计算时间间隔(小时) Compute time gap in hours"""
-        messages = conversation.get("messages", [])
-        if not messages:
-            return 0
-        from datetime import datetime, timezone
-        last_time = messages[-1].get("created_at")
-        if not last_time:
-            return 0
-        now = datetime.now(timezone.utc)
-        delta = now - last_time
-        return delta.total_seconds() / 3600
-
-    async def _generate_summary(self, conversation) -> str:
-        """生成会话摘要用于新会话延续 Generate summary for carry-over"""
-        # 实际实现调用 LLM 生成摘要 Actual impl calls LLM
-        return "Previous conversation summary..."
-```
-
-### API Endpoint Design
-
-```python
-# 路由判断端点 Route decision endpoint
-
-@router.post("/chat/route")
-async def route_message(request: RouteRequest):
-    """
-    在发送消息前调用，获取路由建议
-    Call before sending message, get routing suggestion
-    """
-    router = SessionRouter()
-    result = await router.route(
-        message=request.message,
-        conversation=await get_conversation(request.conversation_id)
-    )
-    return {
-        "decision": result.decision.value,
-        "confidence": result.confidence,
-        "reason": result.reason,
-        "summary": result.summary_carry_over
-    }
-```
+See `examples/session-router-prompt.md` for the complete prompt template.
 
 ---
 
-## Frontend Implementation
+### Pattern 2: Lightweight Middleware (Moderate Complexity)
 
-### Store Integration (Vue 3 + Pinia)
+A thin routing layer between the frontend and the AI model. Intercepts messages, runs quick checks, and decides routing before the message reaches the model.
 
-```javascript
-// composables/useSessionRouter.js
-// 会话路由组合函数 Session routing composable
-
-import { ref } from 'vue'
-
-/**
- * 会话路由组合函数 Session routing composable
- * 在发送消息前判断是否需要新会话 Determine if new session needed before send
- */
-export function useSessionRouter(chatStore) {
-  const routeDecision = ref(null)
-  const checking = ref(false)
-
-  // 显式意图关键词 Explicit intent keywords
-  const INTENT_KEYWORDS = {
-    zh: ['新对话', '新会话', '换个话题', '重新开始', '新的问题'],
-    en: ['new chat', 'new conversation', 'new topic', 'start over']
-  }
-
-  // 时间间隔阈值(毫秒) Time gap thresholds in ms
-  const TIME_GAP = {
-    PROMPT: 4 * 60 * 60 * 1000,    // 4小时 4 hours
-    NEW_SESSION: 24 * 60 * 60 * 1000 // 24小时 24 hours
-  }
-
-  /**
-   * 快速本地检查 Quick local checks (no API call)
-   */
-  function quickCheck(message) {
-    // 1. 显式意图 Explicit intent
-    const text = message.toLowerCase()
-    const allKeywords = [...INTENT_KEYWORDS.zh, ...INTENT_KEYWORDS.en]
-    const matchedIntent = allKeywords.find(kw => text.includes(kw))
-    if (matchedIntent) {
-      return { decision: 'new_session', reason: `Intent: "${matchedIntent}"` }
-    }
-
-    // 2. 时间间隔 Time gap
-    const messages = chatStore.messages
-    if (messages.length > 0) {
-      const lastMsg = messages[messages.length - 1]
-      const gap = Date.now() - new Date(lastMsg.timestamp).getTime()
-      if (gap > TIME_GAP.NEW_SESSION) {
-        return { decision: 'prompt_user', reason: 'Long time gap (>24h)' }
-      }
-      if (gap > TIME_GAP.PROMPT) {
-        return { decision: 'prompt_user', reason: 'Medium time gap (>4h)' }
-      }
-    }
-
-    return null // 需要服务端判断 Need server-side check
-  }
-
-  /**
-   * 完整路由检查(含 API 调用) Full routing check with API
-   */
-  async function fullCheck(message, conversationId) {
-    checking.value = true
-    try {
-      // 先做本地快速检查 Local quick check first
-      const localResult = quickCheck(message)
-      if (localResult) {
-        routeDecision.value = localResult
-        return localResult
-      }
-
-      // 调用后端路由 API Call backend routing API
-      const response = await fetch('/api/chat/route', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message, conversation_id: conversationId })
-      })
-      const result = await response.json()
-      routeDecision.value = result
-      return result
-    } finally {
-      checking.value = false
-    }
-  }
-
-  return {
-    routeDecision,
-    checking,
-    quickCheck,
-    fullCheck
-  }
-}
+**Architecture:**
+```
+Frontend → [Session Router Middleware] → AI Model
+               │
+               ├── Intent Detector (keyword matching)
+               ├── Time Gap Checker (timestamp comparison)
+               ├── Context Monitor (token counting)
+               └── Decision Aggregator
 ```
 
-### Message Send Flow Integration
+**Key design decisions:**
+- **Synchronous fast path:** Intent detection + time gap check (< 10ms combined)
+- **Async slow path:** Semantic similarity via embeddings (optional, ~100ms)
+- **Fallback:** If routing service is down, default to CONTINUE (never block the user)
 
-```javascript
-// 在 send 方法中集成路由判断 Integrate routing in send method
+**Where to place the router:**
+- As API middleware (intercept before handler)
+- As a service layer function (called explicitly by the chat handler)
+- As a frontend pre-send hook (client-side only, no backend needed for basic checks)
 
-async function sendWithRouting({ text, attachments, spaceId }) {
-  const router = useSessionRouter(chatStore)
-
-  // 执行路由检查 Perform route check
-  const result = await router.fullCheck(text, chatStore.sessionId)
-
-  switch (result.decision) {
-    case 'continue':
-      // 正常发送 Send normally
-      await chatStore.send({ text, attachments, spaceId })
-      break
-
-    case 'new_session':
-      // 自动创建新会话 Auto-create new session
-      chatStore.reset()
-      await chatStore.send({ text, attachments, spaceId })
-      break
-
-    case 'prompt_user':
-      // 弹窗询问用户 Show modal to ask user
-      const userChoice = await showRouteConfirmModal({
-        reason: result.reason,
-        options: ['continue', 'new_session']
-      })
-      if (userChoice === 'new_session') {
-        chatStore.reset()
-      }
-      await chatStore.send({ text, attachments, spaceId })
-      break
-  }
-}
-```
+**Pros:** Deterministic, tunable, auditable routing decisions
+**Cons:** Requires backend deployment, needs threshold tuning
+**Best for:** Production applications, teams that need control and observability
 
 ---
 
-## Prompt Engineering Approach
+### Pattern 3: Hybrid (Production Grade)
 
-For teams that prefer embedding routing logic into the AI model's system prompt rather than building a separate service, the key principle is:
+Combines client-side heuristics with server-side intelligence for the best user experience.
 
-**Inject a routing analysis step at the beginning of every response generation.**
+**Architecture:**
+```
+┌─────── Frontend ───────┐     ┌─────── Backend ────────┐
+│                         │     │                         │
+│  Quick checks:          │     │  Deep checks:           │
+│  • Intent keywords      │────▶│  • Semantic similarity  │
+│  • Time gap             │     │  • Context window state  │
+│  • Message count        │     │  • Conversation health   │
+│                         │     │  • Historical patterns   │
+│  If clear → act locally │     │                         │
+│  If unsure → ask server │     │  Returns: decision +    │
+│                         │     │  confidence + reason     │
+└─────────────────────────┘     └─────────────────────────┘
+```
 
-The AI model receives:
-1. Current conversation history
-2. The new user message
-3. A system instruction to first analyze routing before responding
+**Key principle: Frontend handles the obvious, backend handles the subtle.**
 
-This approach trades latency for simplicity — no extra infrastructure needed, but adds ~100-200 tokens of overhead per response.
+- User says "新对话" → Frontend catches it instantly, no round trip
+- Ambiguous topic shift → Frontend asks backend for semantic analysis
+- Context window warning → Backend monitors token count, triggers proactively
 
-See `examples/session-router-prompt.md` for a production-ready prompt template.
+**Pros:** Fast UX for obvious cases, smart decisions for ambiguous cases
+**Cons:** Most complex to implement and maintain
+**Best for:** Large-scale applications with high routing accuracy requirements
 
 ---
 
-## Monitoring and Tuning
+## Key Design Principles
 
-### Key Metrics to Track
+### 1. Never Block the User
 
-| Metric | Description | Target |
-|--------|-------------|--------|
-| Auto-route accuracy | % of auto-routing decisions users don't override | > 90% |
-| False positive rate | New sessions created unnecessarily | < 5% |
-| False negative rate | Continued sessions that should have been new | < 10% |
-| Prompt rate | % of messages requiring user confirmation | < 15% |
-| Avg routing latency | Time added by routing check | < 200ms |
+Routing should be transparent. If the routing check takes too long or fails:
+- Default to **CONTINUE**
+- Log the failure for later analysis
+- Never show an error to the user about routing
 
-### Tuning Approach
+### 2. Graceful Degradation
 
-1. Start with conservative thresholds (favor CONTINUE over NEW SESSION)
-2. Log all routing decisions with user overrides
+```
+Full service available  → Semantic + Intent + Context + Time
+Embedding service down  → Intent + Context + Time (skip semantic)
+Backend unreachable     → Frontend intent + time checks only
+Everything fails        → Just send the message (CONTINUE)
+```
+
+### 3. Summary Carry-Over
+
+When auto-creating a new session, preserve context:
+- Generate a structured summary of the previous conversation
+- Include: topics discussed, key decisions, unresolved questions
+- Inject as the first system message in the new session
+- Keep a reference link between parent and child sessions
+
+### 4. User Override
+
+Always respect explicit user choices:
+- If user says "继续" after a routing prompt → honor it
+- Provide a "New Session" button in the UI for manual control
+- Allow per-user preference: "Never auto-route" setting
+- Track override patterns to improve threshold calibration
+
+### 5. Observability
+
+Log every routing decision for analysis:
+
+| Field | Purpose |
+|-------|---------|
+| `message_preview` | First 50 chars of the triggering message |
+| `decision` | continue / new_session / prompt / fork |
+| `confidence` | 0.0 - 1.0 |
+| `signals_fired` | Which of the 5 signals triggered |
+| `user_override` | Did the user override the decision? |
+| `latency_ms` | How long the routing check took |
+
+Use this data to:
+- Tune thresholds (if override rate > 10%, adjust)
+- Identify new intent keywords from user messages
+- Detect model-specific routing quality issues
+
+---
+
+## Monitoring & Tuning
+
+### Key Metrics
+
+| Metric | Target | Red Flag |
+|--------|--------|----------|
+| Auto-route accuracy | > 90% | < 80% |
+| User override rate | < 10% | > 20% |
+| False positive rate (unnecessary new sessions) | < 5% | > 10% |
+| False negative rate (missed topic shifts) | < 10% | > 20% |
+| Routing latency (P95) | < 200ms | > 500ms |
+
+### Tuning Loop
+
+1. Start with conservative thresholds (favor CONTINUE)
+2. Log all decisions + user overrides
 3. Weekly review: adjust thresholds based on override patterns
 4. A/B test threshold changes on a subset of users
+5. Repeat
